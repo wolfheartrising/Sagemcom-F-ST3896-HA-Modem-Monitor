@@ -6,6 +6,58 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.2.0] - 2026-05-06 — SENSOR-FIRST ARCHITECTURE REWRITE
+
+### Architecture
+- **PRIMARY**: Add-on now exposes a built-in HTTP state API at `:<http_port>/api/modem/state` — no MQTT required
+- **SECONDARY**: MQTT is now optional (`mqtt_enabled: false` by default) and mirrors the state object only when enabled
+- Internal canonical state object written to `/data/state.json` on every successful poll
+
+### New Config Options
+- `http_port` (default: `8099`) — port for the HTTP state API
+- `mqtt_enabled` (default: `false`) — toggle MQTT mirror on/off
+
+### Observability / Logging
+- Structured event-code logging: `[BOOT]`, `[LOGIN_OK]`, `[AUTH_FAILURE]`, `[SESSION_EXPIRED]`, `[POLL_FAIL]`, `[SENSOR_UPDATE_SUCCESS]`, `[SENSOR_UPDATE_SKIPPED]`, `[STATE_INVALID]`, `[INVALID_DOCSIS_RESPONSE]`, `[MODEM_UNREACHABLE]`, `[MODEM_TIMEOUT]`, `[MQTT_MIRROR]`, `[MQTT_FAILURE]`, `[HTTP_SERVER]`
+- Boot banner logs modem host, interval, HTTP port, and MQTT status
+- All timestamps in UTC ISO 8601
+
+### Sensor State Schema
+```json
+{
+  "modem":   { "status": "online|offline|auth_error", "session": "valid|expired|retry" },
+  "docsis":  { "downstreams": [...], "upstreams": [...] },
+  "metrics": { "downstream_count": 0, "upstream_count": 0, "downstream_snr_avg": null,
+               "downstream_power_avg": null, "upstream_power_avg": null },
+  "health":  { "fail_count": 0, "last_success": "...", "last_error": null }
+}
+```
+
+### Home Assistant REST Sensor (add to `configuration.yaml`)
+```yaml
+rest:
+  - resource: http://localhost:8099/api/modem/state
+    scan_interval: 60
+    sensor:
+      - name: "Modem Status"
+        value_template: "{{ value_json.modem.status }}"
+      - name: "Downstream Channels"
+        value_template: "{{ value_json.metrics.downstream_count }}"
+      - name: "Upstream Channels"
+        value_template: "{{ value_json.metrics.upstream_count }}"
+      - name: "Downstream SNR Avg"
+        value_template: "{{ value_json.metrics.downstream_snr_avg }}"
+        unit_of_measurement: "dB"
+      - name: "Downstream Power Avg"
+        value_template: "{{ value_json.metrics.downstream_power_avg }}"
+        unit_of_measurement: "dBmV"
+      - name: "Upstream Power Avg"
+        value_template: "{{ value_json.metrics.upstream_power_avg }}"
+        unit_of_measurement: "dBmV"
+```
+
+---
+
 ## [3.1.1] - 2026-05-06
 
 ### Changed
