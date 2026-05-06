@@ -264,22 +264,26 @@ def probe_modem():
 # =========================
 
 def bootstrap():
+    """Best-effort GUI session init.  Never raises -- returns True on success, False on failure."""
     log("BOOTSTRAP", f"Loading GUI -- {MODEM_GUI_URL}")
     try:
         r = _http.get(
             MODEM_GUI_URL,
             headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"},
             verify=False,
-            timeout=20,
+            timeout=8,
         )
     except requests.exceptions.Timeout:
-        raise Exception("MODEM_TIMEOUT: GUI page timed out after 20s")
+        log("BOOTSTRAP", "GUI page timed out (8s) -- skipping JS fetch, will attempt login anyway", "WARN")
+        return False
     except Exception as e:
-        raise Exception(f"MODEM_UNREACHABLE: {e}")
+        log("BOOTSTRAP", f"GUI unreachable: {e} -- will attempt login anyway", "WARN")
+        return False
 
     if r.status_code not in (200, 302, 304):
-        snippet = r.text[:80].replace("\n", " ").strip()
-        raise Exception(f"GUI_NOT_INITIALIZED: HTTP {r.status_code} -- {snippet}")
+        snippet = r.text[:120].replace("\n", " ").strip()
+        log("BOOTSTRAP", f"GUI returned HTTP {r.status_code}: {snippet} -- will attempt login anyway", "WARN")
+        return False
 
     log("BOOTSTRAP", f"GUI page received (HTTP {r.status_code}), loading JS asset")
 
@@ -297,7 +301,7 @@ def bootstrap():
                 else f"{MODEM_BASE}/{js_path.lstrip('/')}"
             )
             jr = _http.get(js_url, headers={"Accept": "application/javascript, */*"},
-                           verify=False, timeout=10)
+                           verify=False, timeout=5)
             if jr.status_code == 200:
                 log("BOOTSTRAP", f"JS asset loaded: {js_path}", "SUCCESS")
                 fetched = True
@@ -309,6 +313,7 @@ def bootstrap():
         log("BOOTSTRAP", "No JS asset loaded -- proceeding (may fail)", "WARN")
 
     log("BOOTSTRAP", "Complete", "SUCCESS")
+    return True
 
 # =========================
 # LOGIN
@@ -547,21 +552,15 @@ def _session_thread():
         log("PROBE", "Modem reachable", "SUCCESS")
         backoff = 5
 
-        # ── BOOTSTRAP ────────────────────────────────────────────────
+        # ── BOOTSTRAP (best-effort) ───────────────────────────────────
         log("BOOTSTRAP", "Starting GUI session bootstrap")
         _session_ready.clear()
         _http.cookies.clear()
         update_state({"modem": {"status": "offline", "session": "expired"}})
 
-        try:
-            bootstrap()
-        except Exception as e:
-            log("BOOTSTRAP", f"Failed: {e} -- retry in {backoff}s", "ERROR")
-            update_state({"health": {"last_error": str(e)}})
-            _interruptible_sleep(backoff)
-            backoff = min(backoff * 2, 60)
-            continue
+        bootstrap()   # never raises; logs warn internally if it fails
         backoff = 5
+        log("BOOTSTRAP", "Bootstrap phase done -- proceeding to login")
 
         # ── LOGIN (retry loop within one bootstrap cycle) ────────────
         login_ok = False
@@ -677,7 +676,7 @@ def _poll_loop():
 
 def run():
     log("BOOT", "============================================")
-    log("BOOT", "  Modem Monitor V3.4.0                     ")
+    log("BOOT", "  Modem Monitor V3.4.2                     ")
     log("BOOT", "============================================")
     log("BOOT", f"Modem        : {MODEM_HOST}")
     log("BOOT", f"Poll interval: {INTERVAL}s")

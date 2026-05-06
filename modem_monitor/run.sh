@@ -7,7 +7,7 @@ exec 1>/proc/1/fd/1 2>/proc/1/fd/2
 set -e
 
 echo "=================================="
-echo " MODEM MONITOR STARTING (V3.4.1)"
+echo " MODEM MONITOR STARTING (V3.4.2)"
 date
 echo "=================================="
 
