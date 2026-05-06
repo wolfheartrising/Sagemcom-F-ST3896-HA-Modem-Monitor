@@ -1,5 +1,5 @@
 name: "Modem Monitor"
-version: "3.1.0"
+version: "3.1.1"
 slug: "modem_monitor"
 
 description: "Sagemcom F@ST3896 telemetry monitor (hardened session + MQTT auth)"
@@ -16,11 +16,11 @@ host_network: true
 options:
   interval: 60
   modem_host: "192.168.100.1"
-  modem_username: "admin"
+  modem_username: ""
   modem_password: ""
   mqtt_host: "core-mosquitto"
   mqtt_topic: "modem/telemetry"
-  mqtt_username: "modemmonitor"
+  mqtt_username: ""
   mqtt_password: ""
 
 schema:

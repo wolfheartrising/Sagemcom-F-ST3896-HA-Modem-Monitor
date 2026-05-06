@@ -6,6 +6,13 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.1.1] - 2026-05-06
+
+### Changed
+- Removed pre-filled default usernames (`admin`, `modemmonitor`) from config — all credential fields now default to empty
+
+---
+
 ## [3.1.0] - 2026-05-06 — HARDENED SESSION + MQTT AUTH REWRITE (CURRENT STABLE ATTEMPT)
 
 ### 🔐 Security / Authentication
