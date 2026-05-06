@@ -6,6 +6,13 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.2.2] - 2026-05-06
+
+### Fixed
+- Removed 10s startup delay — unnecessary since the main loop already retries login on failure
+
+---
+
 ## [3.2.1] - 2026-05-06
 
 ### Fixed

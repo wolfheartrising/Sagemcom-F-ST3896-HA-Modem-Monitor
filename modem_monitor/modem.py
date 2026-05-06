@@ -401,9 +401,6 @@ def run():
         _init_mqtt()
         threading.Thread(target=_mqtt_connect, daemon=True).start()
 
-    log("BOOT", "Waiting 10s for modem interface to settle...")
-    time.sleep(10)
-
     try:
         login()
     except Exception:

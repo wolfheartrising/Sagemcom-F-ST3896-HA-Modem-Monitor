@@ -1,5 +1,5 @@
 name: "Modem Monitor"
-version: "3.2.1"
+version: "3.2.2"
 slug: "modem_monitor"
 
 description: "Sagemcom F@ST3896 sensor-first telemetry monitor with HTTP state API and optional MQTT mirror"
