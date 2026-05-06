@@ -7,8 +7,6 @@ import requests
 import urllib3
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import paho.mqtt.client as mqtt
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =========================
@@ -124,6 +122,7 @@ _mqttc = None
 
 def _init_mqtt():
     global _mqttc
+    import paho.mqtt.client as mqtt  # lazy import — only loaded when MQTT enabled
     _mqttc = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     if MQTT_USER:
         _mqttc.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -376,14 +375,38 @@ def _query(xpaths):
 # KEEPALIVE
 # =========================
 
-def keepalive():
-    """Lightweight ping to prevent session expiry between polls."""
-    log("KEEPALIVE", "Sending keepalive ping")
+def _keepalive_ping():
+    """
+    Lightweight ping fired DURING the idle sleep period — NOT before a poll.
+    Returns True if session is still valid, False if bootstrap is needed.
+    """
     try:
         _query(["Device/DeviceInfo/Manufacturer"])
-        log("KEEPALIVE", "OK")
+        return True
     except HtmlResponseError:
-        raise  # bubble to state machine
+        return False
+
+
+def _sleep_with_keepalive(duration):
+    """
+    Sleep for `duration` seconds.  If duration > KEEPALIVE_EVERY, fire a
+    keepalive ping at the midpoint to prevent silent session expiry.
+    Returns True if session is still alive, False if bootstrap is needed.
+    """
+    if duration <= KEEPALIVE_EVERY or not _session_id:
+        time.sleep(duration)
+        return True
+
+    first_half = duration // 2
+    time.sleep(first_half)
+
+    log("KEEPALIVE", f"Mid-sleep ping (idle {first_half}s)")
+    ok = _keepalive_ping()
+    if not ok:
+        return False
+
+    time.sleep(duration - first_half)
+    return True
 
 # =========================
 # DOCSIS PARSING
@@ -504,7 +527,7 @@ def poll():
 
 def run():
     log("BOOT", "========================================")
-    log("BOOT", "  Modem Monitor V3.3.0 -- sensor-first  ")
+    log("BOOT", "  Modem Monitor V3.3.1 -- sensor-first  ")
     log("BOOT", "========================================")
     log("BOOT", f"Modem host   : {MODEM_HOST}")
     log("BOOT", f"Poll interval: {INTERVAL}s")
@@ -559,18 +582,7 @@ def run():
         # -- ACTIVE (poll + keepalive loop) --------------------------
         elif sm_state == "ACTIVE":
 
-            # Keepalive: fire if INTERVAL is long and session is idle
-            if INTERVAL > KEEPALIVE_EVERY:
-                idle = time.time() - _last_api_call
-                if idle >= KEEPALIVE_EVERY:
-                    try:
-                        keepalive()
-                    except HtmlResponseError:
-                        log("STATE_MACHINE", "Session lost during keepalive -> BOOTSTRAP", "WARN")
-                        sm_state = "BOOTSTRAP"
-                        continue
-
-            # Poll
+            # Poll — keepalive is NOT called here; it fires during idle sleep below
             try:
                 ok = poll()
             except HtmlResponseError:
@@ -587,7 +599,12 @@ def run():
                     log("POLL_FAIL", "Transient failure, backing off 10s", "WARN")
                     time.sleep(10)
             else:
-                time.sleep(INTERVAL)
+                # Sleep until next poll; fires a keepalive at midpoint if INTERVAL > 30s
+                session_alive = _sleep_with_keepalive(INTERVAL)
+                if not session_alive:
+                    log("STATE_MACHINE", "Session lost during keepalive -> BOOTSTRAP", "WARN")
+                    update_state({"modem": {"status": "offline", "session": "expired"}})
+                    sm_state = "BOOTSTRAP"
 
 # =========================
 # START

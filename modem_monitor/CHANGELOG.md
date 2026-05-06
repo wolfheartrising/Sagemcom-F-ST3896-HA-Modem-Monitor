@@ -6,6 +6,15 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.3.1] - 2026-05-06
+
+### Fixed / Optimised
+- **Keepalive no longer fires before every poll** — it now fires only during the idle sleep period via `_sleep_with_keepalive()`. With `INTERVAL=60s` this eliminates one redundant modem request per cycle
+- `paho-mqtt` import is now lazy (inside `_init_mqtt`) — not loaded at all when `mqtt_enabled: false`
+- Removed noisy `[KEEPALIVE] OK` INFO log; keepalive only logs when it fires (mid-sleep ping) or fails
+
+---
+
 ## [3.3.0] - 2026-05-06 — BROWSER-SIMULATED STATE MACHINE REWRITE
 
 ### Architecture
