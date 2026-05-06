@@ -23,11 +23,11 @@ Polls the Sagemcom F@ST3896 modem JSON API on a configurable interval and publis
 | Option | Default | Description |
 |---|---|---|
 | `modem_host` | `192.168.100.1` | Modem IP address |
-| `modem_username` | `admin` | Modem login username |
+| `modem_username` | _(empty)_ | Modem login username |
 | `modem_password` | _(empty)_ | Modem login password |
 | `mqtt_host` | `core-mosquitto` | MQTT broker hostname |
 | `mqtt_topic` | `modem/telemetry` | Topic to publish telemetry |
-| `mqtt_username` | `modemmonitor` | MQTT username |
+| `mqtt_username` | _(empty)_ | MQTT username |
 | `mqtt_password` | _(empty)_ | MQTT password |
 | `interval` | `60` | Poll interval in seconds (10–300) |
 
