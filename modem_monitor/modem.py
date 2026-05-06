@@ -676,7 +676,7 @@ def _poll_loop():
 
 def run():
     log("BOOT", "============================================")
-    log("BOOT", "  Modem Monitor V3.4.2                     ")
+    log("BOOT", "  Modem Monitor V3.4.3                     ")
     log("BOOT", "============================================")
     log("BOOT", f"Modem        : {MODEM_HOST}")
     log("BOOT", f"Poll interval: {INTERVAL}s")

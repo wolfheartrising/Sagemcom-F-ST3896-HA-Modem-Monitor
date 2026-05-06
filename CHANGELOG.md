@@ -6,6 +6,14 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.4.3] - 2026-05-06 — REMOVE BROKEN STDOUT REDIRECT
+
+### Fixed
+- **Removed `exec 1>/proc/1/fd/1 2>/proc/1/fd/2` from run.sh** — this redirect was added in v3.4.1 to bypass the s6-log pipeline but instead caused bash to exit immediately if the fd path was inaccessible, preventing Python from ever starting. The hassio-addons base image already routes service stdout to the HA log system correctly; the redirect was never needed.
+- Added UTC timestamp to the run.sh startup banner line
+
+---
+
 ## [3.4.2] - 2026-05-06 — BOOTSTRAP BEST-EFFORT
 
 ### Fixed
