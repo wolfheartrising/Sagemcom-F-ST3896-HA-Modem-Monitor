@@ -16,8 +16,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/data/options.json")
 
-with open(CONFIG_PATH, "r") as f:
-    CONFIG = json.load(f)
+try:
+    with open(CONFIG_PATH, "r") as f:
+        CONFIG = json.load(f)
+except Exception as _cfg_err:
+    print(f"[FATAL] Could not load config from {CONFIG_PATH}: {_cfg_err}", flush=True)
+    raise
 
 INTERVAL        = CONFIG.get("interval", 60)
 MODEM_HOST      = CONFIG.get("modem_host")
