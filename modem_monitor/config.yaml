@@ -7,7 +7,7 @@ description: "Sagemcom F@ST3896 modem monitor -- non-blocking threaded architect
 arch:
   - amd64
 
-startup: services
+startup: application
 boot: auto
 init: false
 
