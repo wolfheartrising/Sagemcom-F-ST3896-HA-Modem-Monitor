@@ -1,0 +1,11 @@
+# Force LF line endings for all files in the repo.
+# Prevents Windows CRLF breaking shell scripts inside Linux Docker containers.
+
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+Dockerfile text eol=lf
