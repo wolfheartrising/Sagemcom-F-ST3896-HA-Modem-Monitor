@@ -6,6 +6,15 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.2.1] - 2026-05-06
+
+### Fixed
+- `login()` now detects HTML responses (e.g. modem returning 504 gateway timeout) before attempting JSON parse — logs `AUTH_FAILURE` with a snippet of the response instead of crashing
+- Added 10s startup delay to let the modem's web interface settle before the first login attempt
+- `run.sh` version string updated to V3.2.0
+
+---
+
 ## [3.2.0] - 2026-05-06 — SENSOR-FIRST ARCHITECTURE REWRITE
 
 ### Architecture

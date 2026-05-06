@@ -189,7 +189,15 @@ def login():
 
     try:
         r = _session.post(MODEM_URL, data={"req": json.dumps(payload)}, verify=False, timeout=20)
-        r.raise_for_status()
+
+        if r.status_code != 200:
+            snippet = r.text[:120].replace("\n", " ").strip()
+            raise Exception(f"HTTP {r.status_code} — {snippet}")
+
+        if "<html" in r.text.lower():
+            snippet = r.text[:120].replace("\n", " ").strip()
+            raise Exception(f"MODEM_UNREACHABLE: got HTML instead of JSON — {snippet}")
+
         data = r.json()
         cb = data["reply"]["actions"][0]["callbacks"][0]["parameters"]
         _session_id = cb.get("id")
@@ -202,7 +210,7 @@ def login():
         _auth_token = None
         update_state({
             "modem":  {"status": "auth_error", "session": "expired"},
-            "health": {"last_error": f"AUTH_FAILURE: {e}"},
+            "health": {"last_error": str(e)},
         })
         log("AUTH_FAILURE", str(e), "ERROR")
         raise
@@ -392,6 +400,9 @@ def run():
     if MQTT_ENABLED:
         _init_mqtt()
         threading.Thread(target=_mqtt_connect, daemon=True).start()
+
+    log("BOOT", "Waiting 10s for modem interface to settle...")
+    time.sleep(10)
 
     try:
         login()

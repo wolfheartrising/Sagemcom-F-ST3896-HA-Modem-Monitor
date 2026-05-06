@@ -3,7 +3,7 @@
 set -e
 
 echo "=================================="
-echo " MODEM MONITOR STARTING (V3.1)"
+echo " MODEM MONITOR STARTING (V3.2.0)"
 date
 echo "=================================="
 
