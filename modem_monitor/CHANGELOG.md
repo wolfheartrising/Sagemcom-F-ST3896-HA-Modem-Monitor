@@ -6,6 +6,43 @@ This project evolved from a standalone Python script â†’ Home Assistant add-on â
 
 ---
 
+## [3.4.0] - 2026-05-06 -- NON-BLOCKING THREADED ARCHITECTURE
+
+### Architecture (breaking change from v3.3.x)
+- **Session manager** runs in a dedicated background thread (`_session_thread`)
+  - Handles: PROBE -> BOOTSTRAP -> LOGIN -> ACTIVE (keepalive) completely off the main thread
+  - Uses `_session_ready` threading.Event to signal the poll loop
+  - Re-bootstraps automatically on any session loss without blocking anything
+- **Poll loop** runs on the main thread and starts immediately on boot
+  - Logs `[POLL] Waiting for session... (boot +Xs)` every 10s until session is ready
+  - Wakes immediately when session becomes available (no wasted interval sleep)
+  - Detects session loss from poll failures and signals session thread to re-bootstrap
+
+### Startup visibility
+- Boot banner prints within <1 second, before any network I/O
+- Every stage logs as it starts: BOOT, HTTP, MQTT, SESSION, PROBE, BOOTSTRAP, LOGIN, POLL
+- No silent waiting -- heartbeat logs every 10s if modem is slow to respond
+
+### New: Modem probe step
+- Lightweight `GET` to modem root before bootstrap (5s timeout)
+- Detects: reachable / unreachable (timeout) / gateway error (504 HTML)
+- Avoids wasting a full 20s bootstrap timeout when modem is simply down
+
+### Login
+- Now logs attempt number: `[LOGIN] Attempt 1/inf as 'admin'`
+- `HtmlResponseError` during login triggers re-bootstrap (not re-login)
+- Other exceptions retry login with backoff before re-bootstrapping
+
+### Keepalive
+- `_interruptible_sleep()` helper replaces the midpoint keepalive in sleep
+- Session thread wakes from keepalive sleep immediately if poll loop clears session
+
+### MQTT
+- Renamed to `_mqtt_connect_loop` -- clearer it is a daemon thread
+- Silently skips publish if not connected (was logging WARN every cycle)
+
+---
+
 ## [3.3.1] - 2026-05-06
 
 ### Fixed / Optimised
