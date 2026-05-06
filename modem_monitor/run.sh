@@ -1,0 +1,12 @@
+#!/usr/bin/with-contenv bashio
+
+set -e
+
+echo "=================================="
+echo " MODEM MONITOR STARTING (V3.1)"
+date
+echo "=================================="
+
+export PYTHONUNBUFFERED=1
+
+exec python3 /app/modem.py
