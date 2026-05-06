@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import time
 import threading
 import requests
@@ -31,7 +32,12 @@ MQTT_PASS    = CONFIG.get("mqtt_password", "")
 HTTP_PORT    = CONFIG.get("http_port", 8099)
 STATE_PATH   = "/data/state.json"
 
-MODEM_URL = f"https://{MODEM_HOST}/cgi/json-req"
+MODEM_BASE       = f"https://{MODEM_HOST}"
+MODEM_GUI_URL    = f"{MODEM_BASE}/2.0/gui/"
+MODEM_API_URL    = f"{MODEM_BASE}/cgi/json-req"
+
+STABILIZE_DELAY  = 0.6   # seconds after login before first query
+KEEPALIVE_EVERY  = 30    # seconds — keepalive fires if INTERVAL > this
 
 # =========================
 # LOGGING
@@ -46,14 +52,14 @@ def log(event, msg, level="INFO"):
 # =========================
 
 _state = {
-    "modem":   {"status": "offline",  "session": "expired"},
-    "docsis":  {"downstreams": [],    "upstreams": []},
+    "modem":   {"status": "offline", "session": "expired"},
+    "docsis":  {"downstreams": [],   "upstreams": []},
     "metrics": {
-        "downstream_count":   0,
-        "upstream_count":     0,
-        "downstream_snr_avg": None,
+        "downstream_count":     0,
+        "upstream_count":       0,
+        "downstream_snr_avg":   None,
         "downstream_power_avg": None,
-        "upstream_power_avg": None,
+        "upstream_power_avg":   None,
     },
     "health":  {"fail_count": 0, "last_success": None, "last_error": None},
 }
@@ -152,22 +158,127 @@ def mqtt_mirror(payload):
         log("MQTT_FAILURE", f"Publish error: {e}", "WARN")
 
 # =========================
+# HTTP SESSION (browser-like)
+# =========================
+
+_http = requests.Session()
+_http.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+})
+
+
+class HtmlResponseError(Exception):
+    """Raised when the modem returns HTML instead of JSON — session invalid."""
+    pass
+
+
+def _is_html(text):
+    return "<html" in text.lower()
+
+
+def _rpc_call(payload, timeout=15):
+    """POST a JSON-RPC payload. Returns parsed JSON or raises on any failure."""
+    r = _http.post(
+        MODEM_API_URL,
+        data={"req": json.dumps(payload)},
+        verify=False,
+        timeout=timeout,
+    )
+    if r.status_code != 200:
+        snippet = r.text[:120].replace("\n", " ").strip()
+        raise Exception(f"HTTP {r.status_code} -- {snippet}")
+    if _is_html(r.text):
+        snippet = r.text[:120].replace("\n", " ").strip()
+        raise HtmlResponseError(f"Got HTML instead of JSON: {snippet}")
+    return r.json()
+
+# =========================
 # SESSION STATE
 # =========================
 
-_session    = requests.Session()
-_session_id = None
-_auth_token = None
-_fail_count = 0
+_session_id    = None
+_auth_token    = None
+_fail_count    = 0
+_last_api_call = 0.0   # tracks last successful RPC for keepalive timing
+
+# =========================
+# BOOTSTRAP
+# =========================
+
+def bootstrap():
+    """
+    Simulate browser initialisation: load the modem GUI page then at least
+    one JS asset.  This is REQUIRED to bind the backend session before any
+    JSON-RPC calls will succeed.
+    """
+    log("BOOTSTRAP", f"Loading GUI -- {MODEM_GUI_URL}")
+
+    try:
+        r = _http.get(
+            MODEM_GUI_URL,
+            headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"},
+            verify=False,
+            timeout=20,
+        )
+    except requests.exceptions.Timeout:
+        raise Exception("MODEM_TIMEOUT: GUI page timed out")
+    except Exception as e:
+        raise Exception(f"MODEM_UNREACHABLE: {e}")
+
+    if r.status_code not in (200, 302, 304):
+        snippet = r.text[:80].replace("\n", " ").strip()
+        raise Exception(f"GUI_NOT_INITIALIZED: HTTP {r.status_code} -- {snippet}")
+
+    log("BOOTSTRAP", f"GUI page received (HTTP {r.status_code}), fetching JS asset")
+
+    # Parse <script src="..."> tags, then try known fallbacks
+    js_candidates = re.findall(
+        r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', r.text, re.IGNORECASE
+    )
+    fallbacks = [
+        "/2.0/gui/js/vendor.js",
+        "/2.0/gui/js/app.js",
+        "/gui/js/vendor.js",
+    ]
+    all_paths = list(dict.fromkeys(js_candidates + fallbacks))
+
+    fetched = False
+    for js_path in all_paths[:6]:
+        try:
+            js_url = (
+                js_path if js_path.startswith("http")
+                else f"{MODEM_BASE}/{js_path.lstrip('/')}"
+            )
+            jr = _http.get(
+                js_url,
+                headers={"Accept": "application/javascript, */*"},
+                verify=False,
+                timeout=10,
+            )
+            if jr.status_code == 200:
+                log("BOOTSTRAP", f"JS asset loaded: {js_path}", "SUCCESS")
+                fetched = True
+                break
+        except Exception:
+            continue
+
+    if not fetched:
+        log("BOOTSTRAP", "No JS asset fetched -- continuing anyway (may fail)", "WARN")
+
+    log("BOOTSTRAP", "GUI bootstrap complete", "SUCCESS")
 
 # =========================
 # LOGIN
 # =========================
 
 def login():
-    global _session_id, _auth_token, _fail_count
+    global _session_id, _auth_token, _fail_count, _last_api_call
 
-    log("LOGIN", f"Attempting login to {MODEM_HOST}")
+    log("LOGIN", f"Logging in as {MODEM_USER!r}")
 
     payload = {
         "request": {
@@ -188,23 +299,26 @@ def login():
     }
 
     try:
-        r = _session.post(MODEM_URL, data={"req": json.dumps(payload)}, verify=False, timeout=20)
-
-        if r.status_code != 200:
-            snippet = r.text[:120].replace("\n", " ").strip()
-            raise Exception(f"HTTP {r.status_code} — {snippet}")
-
-        if "<html" in r.text.lower():
-            snippet = r.text[:120].replace("\n", " ").strip()
-            raise Exception(f"MODEM_UNREACHABLE: got HTML instead of JSON — {snippet}")
-
-        data = r.json()
+        data = _rpc_call(payload, timeout=20)
         cb = data["reply"]["actions"][0]["callbacks"][0]["parameters"]
         _session_id = cb.get("id")
         _auth_token = data["reply"]["auth"]["token"]
         _fail_count = 0
+        _last_api_call = time.time()
         update_state({"modem": {"session": "valid"}})
         log("LOGIN_OK", f"Session established id={_session_id}", "SUCCESS")
+        time.sleep(STABILIZE_DELAY)
+
+    except HtmlResponseError as e:
+        _session_id = None
+        _auth_token = None
+        update_state({
+            "modem":  {"status": "auth_error", "session": "expired"},
+            "health": {"last_error": str(e)},
+        })
+        log("GUI_NOT_INITIALIZED", f"Login returned HTML -- re-bootstrap needed: {e}", "ERROR")
+        raise
+
     except Exception as e:
         _session_id = None
         _auth_token = None
@@ -216,11 +330,11 @@ def login():
         raise
 
 # =========================
-# QUERY
+# RAW QUERY
 # =========================
 
 def _query(xpaths):
-    global _fail_count
+    global _fail_count, _last_api_call
 
     if not _session_id or not _auth_token:
         return None
@@ -238,29 +352,38 @@ def _query(xpaths):
     }
 
     try:
-        r = _session.post(MODEM_URL, data={"req": json.dumps(payload)}, verify=False, timeout=15)
+        result = _rpc_call(payload, timeout=15)
+        _last_api_call = time.time()
+        return result
 
-        if r.status_code != 200:
-            _fail_count += 1
-            log("MODEM_UNREACHABLE", f"HTTP {r.status_code}", "WARN")
-            return None
-
-        if "<html>" in r.text.lower():
-            _fail_count += 1
-            update_state({"modem": {"session": "expired"}})
-            log("SESSION_EXPIRED", "Got HTML response — session lost", "WARN")
-            return None
-
-        return r.json()
+    except HtmlResponseError as e:
+        _fail_count += 1
+        update_state({"modem": {"session": "expired"}})
+        log("SESSION_EXPIRED", str(e), "WARN")
+        raise  # bubble to state machine
 
     except requests.exceptions.Timeout:
         _fail_count += 1
         log("MODEM_TIMEOUT", "Request timed out", "WARN")
         return None
+
     except Exception as e:
         _fail_count += 1
         log("MODEM_UNREACHABLE", str(e), "WARN")
         return None
+
+# =========================
+# KEEPALIVE
+# =========================
+
+def keepalive():
+    """Lightweight ping to prevent session expiry between polls."""
+    log("KEEPALIVE", "Sending keepalive ping")
+    try:
+        _query(["Device/DeviceInfo/Manufacturer"])
+        log("KEEPALIVE", "OK")
+    except HtmlResponseError:
+        raise  # bubble to state machine
 
 # =========================
 # DOCSIS PARSING
@@ -317,12 +440,15 @@ def _compute_metrics(downstreams, upstreams):
 def poll():
     global _fail_count
 
-    r = _query([
-        "Device/Docsis/CableModem/Downstreams",
-        "Device/Docsis/CableModem/Upstreams",
-    ])
+    try:
+        r = _query([
+            "Device/Docsis/CableModem/Downstreams",
+            "Device/Docsis/CableModem/Upstreams",
+        ])
+    except HtmlResponseError:
+        raise  # bubble to state machine
 
-    if not r:
+    if r is None:
         _fail_count += 1
         update_state({"modem": {"status": "offline"}, "health": {"fail_count": _fail_count}})
         log("SENSOR_UPDATE_SKIPPED", f"No data received (fail_count={_fail_count})", "WARN")
@@ -340,14 +466,13 @@ def poll():
         return False
 
     downstreams, upstreams = _parse_channels(actions)
-
     if downstreams is None:
         _fail_count += 1
         log("STATE_INVALID", "Channel parse failed", "WARN")
         return False
 
     metrics = _compute_metrics(downstreams, upstreams)
-    ts      = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     _fail_count = 0
 
     update_state({
@@ -370,30 +495,22 @@ def poll():
     return True
 
 # =========================
-# REAUTH CHECK
-# =========================
-
-def _needs_reauth():
-    s = get_state()
-    return (
-        _session_id is None
-        or _auth_token is None
-        or _fail_count >= 3
-        or s["modem"]["session"] != "valid"
-    )
-
-# =========================
-# MAIN LOOP
+# MAIN STATE MACHINE
+#
+# BOOTSTRAP -> LOGIN -> ACTIVE ---> BOOTSTRAP (on session loss)
+#     ^                                  |
+#     +----------------------------------+
 # =========================
 
 def run():
     log("BOOT", "========================================")
-    log("BOOT", "  Modem Monitor V3.2.0 — sensor-first  ")
+    log("BOOT", "  Modem Monitor V3.3.0 -- sensor-first  ")
     log("BOOT", "========================================")
     log("BOOT", f"Modem host   : {MODEM_HOST}")
     log("BOOT", f"Poll interval: {INTERVAL}s")
+    log("BOOT", f"Keepalive    : every {KEEPALIVE_EVERY}s (when INTERVAL > {KEEPALIVE_EVERY})")
     log("BOOT", f"HTTP state   : :{HTTP_PORT}/api/modem/state")
-    log("BOOT", f"MQTT mirror  : {'enabled → ' + MQTT_HOST if MQTT_ENABLED else 'disabled'}")
+    log("BOOT", f"MQTT mirror  : {'enabled -> ' + MQTT_HOST if MQTT_ENABLED else 'disabled'}")
 
     threading.Thread(target=_start_http_server, daemon=True).start()
 
@@ -401,28 +518,76 @@ def run():
         _init_mqtt()
         threading.Thread(target=_mqtt_connect, daemon=True).start()
 
-    try:
-        login()
-    except Exception:
-        log("BOOT", "Initial login failed — will retry in main loop", "WARN")
+    sm_state = "BOOTSTRAP"
+    backoff  = 5
 
     while True:
-        if _needs_reauth():
-            log("SESSION_EXPIRED", "Re-auth required", "WARN")
+
+        # -- BOOTSTRAP -----------------------------------------------
+        if sm_state == "BOOTSTRAP":
+            log("STATE_MACHINE", "-> BOOTSTRAP")
+            update_state({"modem": {"status": "offline", "session": "expired"}})
+            _http.cookies.clear()
+            try:
+                bootstrap()
+                sm_state = "LOGIN"
+                backoff  = 5
+            except Exception as e:
+                log("GUI_NOT_INITIALIZED", f"Bootstrap failed: {e} -- retry in {backoff}s", "ERROR")
+                update_state({"health": {"last_error": str(e)}})
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+        # -- LOGIN ---------------------------------------------------
+        elif sm_state == "LOGIN":
+            log("STATE_MACHINE", "-> LOGIN")
             try:
                 login()
+                sm_state = "ACTIVE"
+                backoff  = 5
+            except HtmlResponseError:
+                log("STATE_MACHINE", "HTML on login -- session not bound, re-bootstrap", "WARN")
+                sm_state = "BOOTSTRAP"
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
             except Exception as e:
-                log("AUTH_FAILURE", f"Login failed: {e}, retrying in 10s", "ERROR")
-                time.sleep(10)
+                log("STATE_MACHINE", f"Login failed: {e} -- re-bootstrap in {backoff}s", "WARN")
+                sm_state = "BOOTSTRAP"
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+        # -- ACTIVE (poll + keepalive loop) --------------------------
+        elif sm_state == "ACTIVE":
+
+            # Keepalive: fire if INTERVAL is long and session is idle
+            if INTERVAL > KEEPALIVE_EVERY:
+                idle = time.time() - _last_api_call
+                if idle >= KEEPALIVE_EVERY:
+                    try:
+                        keepalive()
+                    except HtmlResponseError:
+                        log("STATE_MACHINE", "Session lost during keepalive -> BOOTSTRAP", "WARN")
+                        sm_state = "BOOTSTRAP"
+                        continue
+
+            # Poll
+            try:
+                ok = poll()
+            except HtmlResponseError:
+                log("STATE_MACHINE", "Session lost during poll -> BOOTSTRAP", "WARN")
+                update_state({"modem": {"status": "offline", "session": "expired"}})
+                sm_state = "BOOTSTRAP"
                 continue
 
-        ok = poll()
-
-        if not ok:
-            log("POLL_FAIL", f"Backing off 10s (fail_count={_fail_count})", "WARN")
-            time.sleep(10)
-        else:
-            time.sleep(INTERVAL)
+            if not ok:
+                if _fail_count >= 3:
+                    log("STATE_MACHINE", f"fail_count={_fail_count} -- re-bootstrap", "WARN")
+                    sm_state = "BOOTSTRAP"
+                else:
+                    log("POLL_FAIL", "Transient failure, backing off 10s", "WARN")
+                    time.sleep(10)
+            else:
+                time.sleep(INTERVAL)
 
 # =========================
 # START

@@ -6,6 +6,37 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.3.0] - 2026-05-06 — BROWSER-SIMULATED STATE MACHINE REWRITE
+
+### Architecture
+- Full state machine implemented: `BOOTSTRAP -> LOGIN -> ACTIVE -> BOOTSTRAP`
+- **GUI bootstrap step added** (was missing and is the root cause of 504/HTML failures):
+  - `GET /2.0/gui/` — loads modem GUI page, binds backend session, captures cookies
+  - Parses `<script src>` tags and fetches first JS asset to complete session binding
+  - Falls back to known paths (`/2.0/gui/js/vendor.js`, `/2.0/gui/js/app.js`) if HTML parsing yields nothing
+- `requests.Session` now set with browser-like `User-Agent` header
+- Cookies cleared on every re-bootstrap to ensure a clean session
+
+### Session Management
+- `HtmlResponseError` exception class — raised whenever modem returns HTML instead of JSON at any call point
+- Any HTML response at bootstrap, login, keepalive, or poll immediately triggers `-> BOOTSTRAP`
+- 600ms stabilisation delay after successful login before first query
+- Exponential backoff (5s → 60s cap) on bootstrap and login failures
+
+### Keepalive
+- Lightweight `getValue` ping sent to `Device/DeviceInfo/Manufacturer` every 30s when `INTERVAL > 30`
+- Prevents silent session expiry between polls
+- HTML response on keepalive triggers immediate re-bootstrap
+
+### Logging (new events)
+- `[STATE_MACHINE]` — state transitions
+- `[BOOTSTRAP]` — GUI page load and JS asset fetch progress
+- `[GUI_NOT_INITIALIZED]` — HTML returned where JSON expected
+- `[KEEPALIVE]` — keepalive ping result
+- `[LOGIN_OK]` / `[AUTH_FAILURE]` / `[SESSION_EXPIRED]` — as before
+
+---
+
 ## [3.2.2] - 2026-05-06
 
 ### Fixed

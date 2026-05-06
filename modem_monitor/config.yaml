@@ -1,8 +1,8 @@
 name: "Modem Monitor"
-version: "3.2.2"
+version: "3.3.0"
 slug: "modem_monitor"
 
-description: "Sagemcom F@ST3896 sensor-first telemetry monitor with HTTP state API and optional MQTT mirror"
+description: "Sagemcom F@ST3896 sensor-first telemetry monitor — GUI bootstrap state machine, keepalive, HTTP state API, optional MQTT"
 
 arch:
   - amd64
