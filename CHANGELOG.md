@@ -6,6 +6,16 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.4.4] - 2026-05-06 — DROP WITH-CONTENV FROM RUN.SH
+
+### Fixed
+- **Replaced `#!/usr/bin/with-contenv bashio` shebang with `#!/bin/bash`** — `with-contenv` is a binary that reads s6's container environment directory; if it can't find that directory (startup race condition), it exits non-zero before ever exec'ing bash. Combined with `set -e`, this caused the script to die silently before the first `echo` line, explaining why no output ever appeared in the log viewer
+- Removed `set -e` to prevent any bash-level failure from killing the script before Python starts
+- Added `-u` flag to `python3` invocation (explicit unbuffered mode, belt-and-suspenders alongside `PYTHONUNBUFFERED=1`)
+- None of the removed functionality was needed: Python reads config from `/data/options.json` directly and doesn't use any HA supervisor environment variables injected by `with-contenv`
+
+---
+
 ## [3.4.3] - 2026-05-06 — REMOVE BROKEN STDOUT REDIRECT
 
 ### Fixed
