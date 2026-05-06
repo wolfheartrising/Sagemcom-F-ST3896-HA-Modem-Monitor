@@ -6,6 +6,28 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.4.2] - 2026-05-06 — BOOTSTRAP BEST-EFFORT
+
+### Fixed
+- **Bootstrap no longer blocks startup on slow/unresponsive modem GUI**
+  - GUI page timeout reduced from 20s → 8s
+  - JS asset timeout reduced from 10s → 5s
+  - Bootstrap failures now log `WARN` and allow login to proceed immediately (previously raised exception → backoff retry loop → silent hang)
+- `startup: services` changed to `startup: application` in config.yaml — prevents add-on from blocking HA core startup sequence
+
+---
+
+## [3.4.1] - 2026-05-06 — STDOUT REDIRECT FIX
+
+### Fixed
+- **Add-on log output now visible in HA UI**
+  - Added `exec 1>/proc/1/fd/1 2>/proc/1/fd/2` to `run.sh` before `exec python3`
+  - s6-overlay v3 pipes supervised service stdout through its own log infrastructure (not Docker stdout); this redirect bypasses it so HA supervisor captures all output
+- **Config load errors now print before crashing** — wrapped module-level `open(CONFIG_PATH)` in try/except with `print()` so fatal config errors are visible in the log
+- Added `.gitattributes` to repo root forcing LF line endings for all `.sh`, `.py`, `.yaml`, and `Dockerfile` — prevents Windows `core.autocrlf=true` from injecting `\r` into shell scripts, which caused `bad interpreter` errors in the Linux container
+
+---
+
 ## [3.4.0] - 2026-05-06 -- NON-BLOCKING THREADED ARCHITECTURE
 
 ### Architecture (breaking change from v3.3.x)
