@@ -2,7 +2,10 @@ import os
 import json
 import re
 import time
+import hashlib
+import random
 import threading
+import urllib.parse
 import requests
 import urllib3
 from datetime import datetime, timezone
@@ -194,12 +197,42 @@ def mqtt_mirror(payload):
 
 _http = requests.Session()
 _http.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+    "Origin": MODEM_BASE,
+    "Referer": MODEM_GUI_URL,
 })
+
+# Gateway data model namespace (required in session-options and cookie)
+_NSS = [{"name": "gtw", "uri": "http://sagemcom.com/gateway-data"}]
+
+_req_id       = 0
+_req_id_lock  = threading.Lock()
+
+def _next_req_id():
+    global _req_id
+    with _req_id_lock:
+        _req_id += 1
+        return _req_id
+
+def _set_session_cookie(sess_id, auth_token):
+    """Set the session cookie the modem firmware expects the JS client to manage."""
+    cookie_val = json.dumps({
+        "req_id":   _req_id,
+        "sess_id":  sess_id,
+        "basic":    False,
+        "user":     MODEM_USER,
+        "dataModel": {"name": "Internal", "nss": _NSS},
+        "authToken": auth_token,
+    }, separators=(",", ":"))
+    _http.cookies.set(
+        "session",
+        urllib.parse.quote(cookie_val),
+        domain=MODEM_HOST,
+        path="/",
+    )
 
 
 class HtmlResponseError(Exception):
@@ -324,21 +357,45 @@ def login(attempt=1):
 
     log("LOGIN", f"Attempt {attempt}/inf as {MODEM_USER!r}")
 
+    cnonce   = random.randint(0, 0x7FFFFFFF)
+    # Sagemcom F@ST firmware: initial auth-key is SHA-512 of the password.
+    # No plaintext password is sent -- the modem JS computes this in-browser.
+    auth_key = hashlib.sha512(MODEM_PASS.encode()).hexdigest()
+
+    # Initialise the session cookie (JS sets this before the login request)
+    _next_req_id()
+    _set_session_cookie(sess_id="0", auth_token="")
+
     payload = {
         "request": {
-            "id": 0,
+            "id":         0,
             "session-id": "0",
+            "priority":   True,
             "actions": [{
-                "id": 0,
+                "id":     0,
                 "method": "logIn",
                 "parameters": {
-                    "user": MODEM_USER,
-                    "password": MODEM_PASS,
+                    "user":       MODEM_USER,
                     "persistent": "true",
-                    "session-options": {"jwt-auth": "true"},
+                    "session-options": {
+                        "nss": _NSS,
+                        "context-flags": {"get-content-name": True, "local-time": True},
+                        "capability-depth": 2,
+                        "capability-flags": {
+                            "name":          True,
+                            "default-value": False,
+                            "restriction":   True,
+                            "description":   False,
+                        },
+                        "time-format":                   "ISO_8601",
+                        "jwt-auth":                      "true",
+                        "write-only-string":             "_XMO_WRITE_ONLY_",
+                        "undefined-write-only-string":   "_XMO_UNDEFINED_WRITE_ONLY_",
+                    },
                 },
             }],
-            "cnonce": int(time.time() * 1000),
+            "cnonce":   cnonce,
+            "auth-key": auth_key,
         }
     }
 
@@ -349,6 +406,9 @@ def login(attempt=1):
         _auth_token = data["reply"]["auth"]["token"]
         _fail_count = 0
         _last_api_call = time.time()
+        # Update session cookie with the real session-id and JWT
+        _next_req_id()
+        _set_session_cookie(sess_id=_session_id, auth_token=_auth_token)
         update_state({"modem": {"session": "valid"}})
         log("LOGIN", f"Success -- session id={_session_id}", "SUCCESS")
         time.sleep(STABILIZE_DELAY)
@@ -381,13 +441,15 @@ def _query(xpaths):
 
     payload = {
         "request": {
-            "id": int(time.time()),
+            "id":         _next_req_id(),
             "session-id": _session_id,
-            "auth-key": _auth_token,
+            "priority":   False,
             "actions": [
                 {"id": i, "method": "getValue", "xpath": xp}
                 for i, xp in enumerate(xpaths)
             ],
+            "cnonce":   random.randint(0, 0x7FFFFFFF),
+            "auth-key": _auth_token,
         }
     }
 
@@ -676,7 +738,7 @@ def _poll_loop():
 
 def run():
     log("BOOT", "============================================")
-    log("BOOT", "  Modem Monitor V3.4.4                     ")
+    log("BOOT", "  Modem Monitor V3.5.0                     ")
     log("BOOT", "============================================")
     log("BOOT", f"Modem        : {MODEM_HOST}")
     log("BOOT", f"Poll interval: {INTERVAL}s")

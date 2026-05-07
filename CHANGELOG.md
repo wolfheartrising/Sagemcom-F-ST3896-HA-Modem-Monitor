@@ -6,6 +6,24 @@ This project evolved from a standalone Python script → Home Assistant add-on �
 
 ---
 
+## [3.5.0] - 2026-05-07 — FIX SAGEMCOM LOGIN PROTOCOL (HAR-VERIFIED)
+
+### Fixed (breaking bug — login never succeeded)
+- **Replaced plaintext `password` field with SHA-512 `auth-key` hash** — Sagemcom F@ST firmware requires the client to compute `sha512(password)` and send it as `auth-key` in the request body. Sending a plaintext `password` field causes the firmware to return a JSON error response (empty `callbacks`), which our code treated as an `IndexError` and retried with exponential backoff indefinitely
+- **Added full `session-options.nss`** — without the gateway namespace `[{"name": "gtw", "uri": "http://sagemcom.com/gateway-data"}]`, the modem does not know which data model to resolve xpaths against
+- **Added `session` cookie management** — the Sagemcom JS client initialises and maintains a `session` cookie that the server uses to identify the session. Added `_set_session_cookie()` to set the initial cookie before login and update it with the real `sess_id` and JWT after successful login
+- **Added `priority: true` to login request** and `priority: false` to data requests (matching browser behaviour)
+- **Added `cnonce` to data query requests** (was missing; present in browser requests)
+- **Updated HTTP session headers** to exactly match Firefox 150 HAR capture: correct `User-Agent`, `Accept`, `Accept-Language`, `X-Requested-With`, `Origin`, `Referer`
+- Added `hashlib`, `random`, `urllib.parse` to imports
+- Added `_NSS` constant for the gateway namespace (used in session-options and cookie)
+- Added `_req_id` request counter + `_next_req_id()` thread-safe helper
+
+### Root cause
+HAR capture from Firefox showed the browser never sends a `password` field — the auth flow uses a pre-computed SHA-512 hash as `auth-key`. The modem was returning `{"callbacks":[]}` (error response) on every login attempt, causing an `IndexError` in our response parser, which triggered the exponential backoff retry loop, explaining the 9-minute hang with no output.
+
+---
+
 ## [3.4.4] - 2026-05-06 — DROP WITH-CONTENV FROM RUN.SH
 
 ### Fixed

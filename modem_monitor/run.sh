@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "=================================="
-echo " MODEM MONITOR STARTING (V3.4.4)"
+echo " MODEM MONITOR STARTING (V3.5.0)"
 echo " $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 echo "=================================="
 
